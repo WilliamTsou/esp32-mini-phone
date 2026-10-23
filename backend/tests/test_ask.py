@@ -1,10 +1,10 @@
 """
 假的 ESP32 — 用來測試 /ask 端點
-在後端跑起來以後，另開一個終端機，執行：
-    python test_ask.py
+在後端跑起來以後，另開一個終端機（在 backend/ 裡）執行：
+    python tests/test_ask.py
 
 它會送一個問題給後端，把 AI 的回答印出來。
-這一步沒問題，就代表你的「收文字 → 問 AI → 回文字」整條路通了。
+這一步沒問題，就代表「收文字 → 問 AI → 回文字」整條路通了。
 """
 
 import urllib.request
@@ -27,6 +27,6 @@ def ask(question: str) -> str:
 
 
 if __name__ == "__main__":
-    question = "Answer in one sentence of TCP"
-    print(f"Q: {question}")
-    print(f"A: {ask(question)}")
+    question = "用一句話解釋什麼是 TCP。"
+    print(f"問：{question}")
+    print(f"答：{ask(question)}")

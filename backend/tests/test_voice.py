@@ -1,14 +1,14 @@
 """
 假的 ESP32（語音版）— 用來測試 /voice 端點
 
-用法：
-    python test_voice.py 你的錄音檔.wav
+用法（在 backend/ 資料夾裡執行）：
+    python tests/test_voice.py tests/test.wav
 
 它會把錄音檔傳給後端，印出「後端聽到什麼」和「AI 回答什麼」。
 
 還沒有錄音檔的話，最簡單的方法：
-  手機或電腦的錄音程式隨便錄一句話，存成或轉成 .wav，放進 backend/ 資料夾，
-  再執行：  python test_voice.py test.wav
+  手機或電腦的錄音程式隨便錄一句話，存成或轉成 .wav，
+  放進 backend/tests/ 資料夾，命名 test.wav，再執行上面那行。
 """
 
 import sys
@@ -39,14 +39,20 @@ def send_voice(wav_path: str) -> dict:
         method="POST",
     )
     with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        # /voice 現在回的是聲音檔，不是 JSON，所以這裡把它存起來。
+        # 「聽到什麼、答什麼」會印在後端那個終端機（uvicorn）。
+        data = resp.read()
+    out = "tests/voice_reply.wav"
+    with open(out, "wb") as f:
+        f.write(data)
+    return {"saved": out, "size": len(data)}
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("用法：python test_voice.py 你的錄音檔.wav")
+        print("用法：python tests/test_voice.py tests/test.wav")
         sys.exit(1)
 
     result = send_voice(sys.argv[1])
-    print(f"後端聽到：{result['heard']}")
-    print(f"AI 回答：{result['answer']}")
+    print(f"回覆聲音已存成：{result['saved']}（{result['size']} bytes）")
+    print("雙擊它就能聽。『聽到什麼、答什麼』印在後端那個終端機。")
