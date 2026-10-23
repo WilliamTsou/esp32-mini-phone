@@ -19,9 +19,30 @@ uvicorn main:app --reload
 
 ## 怎麼測試
 
-兩種方法，挑一個：
+兩種方法：
 
 1. **瀏覽器**：打開 http://127.0.0.1:8000/docs ，點 `/ask` → Try it out，輸入問題。
 2. **指令**：另開一個終端機，`python test_ask.py`。
 
 看到 AI 的回答，就代表第一步通了。
+
+## 怎麼測試
+ 
+兩種方法，挑一個：
+ 
+1. **瀏覽器**：打開 http://127.0.0.1:8000/docs ，點 `/ask` → Try it out，輸入問題。
+2. **指令**：另開一個終端機，`python test_ask.py`。
+看到 AI 的回答，就代表第一步通了。
+ 
+### 測試 /voice（第二步）
+ 
+先準備一個 `.wav` 錄音檔（手機或電腦隨便錄一句話），放進 `backend/`，然後：
+ 
+```bash
+python test_voice.py test.wav
+```
+ 
+看到「後端聽到：…」和「AI 回答：…」，就代表語音這條路通了。
+也可以用瀏覽器 http://127.0.0.1:8000/docs 的 `/voice` → Try it out 直接上傳檔案。
+ 
+> 第一次跑會自動下載 Whisper 模型（約 150MB），要等一下，之後就不用再下載。

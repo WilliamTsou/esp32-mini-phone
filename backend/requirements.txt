@@ -1,5 +1,7 @@
 fastapi
 uvicorn[standard]
 google-genai
-anthropic
 python-dotenv
+python-multipart
+faster-whisper
+ 
