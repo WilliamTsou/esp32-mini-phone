@@ -22,6 +22,7 @@ import os
 import time
 import tempfile
 import wave
+import datetime
 
 from google import genai
 from google.genai import types
@@ -210,7 +211,9 @@ async def voice_save(audio: UploadFile = File(...)):
         os.remove(tmp_path)
 
     # 存成檔案，方便你直接雙擊聽
-    with open("last_reply.wav", "wb") as f:
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join("audio_out", f"reply_{ts}.wav")
+    with open(out_path, "wb") as f:
         f.write(reply_audio)
     print(f"[voice_save] 聽到：{heard}")
     print(f"[voice_save] 回答：{answer}")
