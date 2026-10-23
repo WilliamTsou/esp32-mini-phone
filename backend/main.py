@@ -187,3 +187,33 @@ async def voice(audio: UploadFile = File(...)):
 
     # 5. 回傳聲音
     return StreamingResponse(io.BytesIO(reply_audio), media_type="audio/wav")
+
+@app.post("/voice_save")
+async def voice_save(audio: UploadFile = File(...)):
+    """跟 /voice 一樣，但把回覆的聲音另存成 last_reply.wav，方便直接雙擊播放。"""
+    suffix = os.path.splitext(audio.filename or "")[1] or ".wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await audio.read())
+        tmp_path = tmp.name
+    try:
+        segments, _ = whisper.transcribe(tmp_path)
+        heard = "".join(seg.text for seg in segments).strip()
+        if not heard:
+            answer = "抱歉，我沒有聽清楚。"
+        else:
+            try:
+                answer = ask_ai(heard)
+            except AIBusyError:
+                answer = BUSY_MESSAGE
+        reply_audio = text_to_speech(answer)
+    finally:
+        os.remove(tmp_path)
+
+    # 存成檔案，方便你直接雙擊聽
+    with open("last_reply.wav", "wb") as f:
+        f.write(reply_audio)
+    print(f"[voice_save] 聽到：{heard}")
+    print(f"[voice_save] 回答：{answer}")
+    print("[voice_save] 聲音已存成 last_reply.wav，可直接雙擊播放")
+
+    return {"heard": heard, "answer": answer, "saved": "last_reply.wav"}
