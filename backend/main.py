@@ -7,9 +7,9 @@ ESP32 小手機 — 後端
   POST /speak   收文字 → 轉語音 → 回聲音（測試發聲用）
   POST /voice   收錄音 → 聽懂 → 問 AI → 轉語音 → 回聲音（完整一條龍）
 
-發聲用 Gemini TTS。它回的是原始聲音資料（PCM），
-所以 text_to_speech() 裡會多幾行把它包成 WAV 檔，之後才能播。
-想換回別的 TTS，只要改 text_to_speech() 裡面，其他都不用動。
+聲音檔會自動留存：
+  進來的錄音 → audio_in/   回覆的聲音 → audio_out/
+  都帶時間戳，不會互相覆蓋。這些資料夾已被 .gitignore 擋住，不會上傳。
 
 跑起來（在 backend/，先 conda activate esp32）：
     1. pip install -r requirements.txt
@@ -20,9 +20,9 @@ ESP32 小手機 — 後端
 import io
 import os
 import time
+import datetime
 import tempfile
 import wave
-import datetime
 
 from google import genai
 from google.genai import types
@@ -35,6 +35,12 @@ from pydantic import BaseModel
 
 # AI 忙線、重試用完還是失敗時，統一給使用者看／聽到的這句話
 BUSY_MESSAGE = "抱歉，AI 現在忙線中，請稍後再試一次。"
+
+# 聲音存放資料夾
+AUDIO_IN_DIR = "audio_in"     # 進來的錄音
+AUDIO_OUT_DIR = "audio_out"   # 回覆的聲音
+os.makedirs(AUDIO_IN_DIR, exist_ok=True)
+os.makedirs(AUDIO_OUT_DIR, exist_ok=True)
 
 # 讀取 .env 裡的金鑰
 load_dotenv()
@@ -61,6 +67,20 @@ class AskResponse(BaseModel):
     answer: str
 
 
+# ---- 小工具：存聲音檔（帶時間戳）----
+def timestamp() -> str:
+    """產生像 20261023_215130 這樣的時間字串，當檔名用，避免互相覆蓋。"""
+    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def save_audio(folder: str, prefix: str, data: bytes, ext: str = "wav") -> str:
+    """把一段聲音存進指定資料夾，回傳存檔路徑。"""
+    path = os.path.join(folder, f"{prefix}_{timestamp()}.{ext}")
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
 # ---- AI 問答（含忙線自動重試）----
 class AIBusyError(Exception):
     """Gemini 忙線、重試多次仍失敗時丟出，讓上層決定怎麼回應使用者。"""
@@ -81,13 +101,11 @@ def ask_ai(question: str, max_retries: int = 3) -> str:
             )
             return response.text
         except genai_errors.ServerError as e:
-            # 503 等伺服器端忙線：還有機會就等一下重試
             wait = 2 ** attempt   # 1, 2, 4 秒
             print(f"[ai] 忙線（第 {attempt + 1} 次），{wait} 秒後重試… {e}")
             if attempt < max_retries - 1:
                 time.sleep(wait)
             else:
-                # 試完都還失敗，往上拋，由端點決定怎麼告訴使用者
                 raise AIBusyError() from e
 
 
@@ -122,10 +140,52 @@ def text_to_speech(text: str) -> bytes:
             ),
         ),
     )
-    # 取出原始 PCM 聲音資料
     pcm = response.candidates[0].content.parts[0].inline_data.data
-    # 包成 WAV 才能播
     return pcm_to_wav(pcm)
+
+
+# ---- 一條龍核心：給一段錄音，回一段聲音（/voice 共用）----
+def run_pipeline(audio_bytes: bytes, suffix: str = ".wav") -> tuple[bytes, str, str]:
+    """
+    錄音 → 聽懂 → 問 AI → 轉語音。
+    回傳 (回覆聲音, 聽到的文字, 回答的文字)。
+    進來的錄音存進 audio_in/，回覆的聲音存進 audio_out/。
+    """
+    # 存一份進來的錄音
+    save_audio(AUDIO_IN_DIR, "in", audio_bytes, suffix.lstrip("."))
+
+    # Whisper 要吃檔案，先寫成暫存檔
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    try:
+        # 聲音轉文字
+        segments, _ = whisper.transcribe(tmp_path)
+        heard = "".join(seg.text for seg in segments).strip()
+
+        # 問 AI（忙線重試用完就改用「忙線中」那句話）
+        if not heard:
+            answer = "抱歉，我沒有聽清楚。"
+        else:
+            try:
+                answer = ask_ai(heard)
+            except AIBusyError:
+                answer = BUSY_MESSAGE
+
+        # 文字轉聲音
+        reply_audio = text_to_speech(answer)
+    finally:
+        os.remove(tmp_path)
+
+    # 存一份回覆的聲音
+    out_path = save_audio(AUDIO_OUT_DIR, "out", reply_audio)
+
+    print(f"[voice] 聽到：{heard}")
+    print(f"[voice] 回答：{answer}")
+    print(f"[voice] 回覆聲音已存：{out_path}")
+
+    return reply_audio, heard, answer
 
 
 # ---- 端點 ----
@@ -147,6 +207,7 @@ def ask(req: AskRequest):
 def speak(req: AskRequest):
     """收文字 → 轉語音 → 回聲音。單獨測發聲用。"""
     audio = text_to_speech(req.question)
+    save_audio(AUDIO_OUT_DIR, "speak", audio)
     return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")
 
 
@@ -155,68 +216,9 @@ async def voice(audio: UploadFile = File(...)):
     """
     完整一條龍：錄音 → 聽懂 → 問 AI → 轉語音 → 回聲音。
     ESP32 只要送一次錄音，就直接拿回可以播的聲音。
+    進來的錄音和回覆的聲音都會自動存檔。
     """
-    # 1. 把上傳的錄音存成暫存檔，Whisper 要吃檔案
     suffix = os.path.splitext(audio.filename or "")[1] or ".wav"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await audio.read())
-        tmp_path = tmp.name
-
-    try:
-        # 2. Whisper 把聲音轉成文字
-        segments, _ = whisper.transcribe(tmp_path)
-        heard = "".join(seg.text for seg in segments).strip()
-
-        # 3. 問 AI。忙線重試用完，就改用「忙線中」那句話當答案，
-        #    使用者會聽到溫柔的說明，而不是整個後端噴 500。
-        if not heard:
-            answer = "抱歉，我沒有聽清楚。"
-        else:
-            try:
-                answer = ask_ai(heard)
-            except AIBusyError:
-                answer = BUSY_MESSAGE
-
-        # 4. 把答案轉成聲音
-        reply_audio = text_to_speech(answer)
-    finally:
-        os.remove(tmp_path)
-
-    # 在後端終端機印出來，方便除錯（header 不能放中文，所以改用印的）
-    print(f"[voice] 聽到：{heard}")
-    print(f"[voice] 回答：{answer}")
-
-    # 5. 回傳聲音
+    audio_bytes = await audio.read()
+    reply_audio, _, _ = run_pipeline(audio_bytes, suffix)
     return StreamingResponse(io.BytesIO(reply_audio), media_type="audio/wav")
-
-@app.post("/voice_save")
-async def voice_save(audio: UploadFile = File(...)):
-    """跟 /voice 一樣，但把回覆的聲音另存成 last_reply.wav，方便直接雙擊播放。"""
-    suffix = os.path.splitext(audio.filename or "")[1] or ".wav"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await audio.read())
-        tmp_path = tmp.name
-    try:
-        segments, _ = whisper.transcribe(tmp_path)
-        heard = "".join(seg.text for seg in segments).strip()
-        if not heard:
-            answer = "抱歉，我沒有聽清楚。"
-        else:
-            try:
-                answer = ask_ai(heard)
-            except AIBusyError:
-                answer = BUSY_MESSAGE
-        reply_audio = text_to_speech(answer)
-    finally:
-        os.remove(tmp_path)
-
-    # 存成檔案，方便你直接雙擊聽
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join("audio_out", f"reply_{ts}.wav")
-    with open(out_path, "wb") as f:
-        f.write(reply_audio)
-    print(f"[voice_save] 聽到：{heard}")
-    print(f"[voice_save] 回答：{answer}")
-    print("[voice_save] 聲音已存成 last_reply.wav，可直接雙擊播放")
-
-    return {"heard": heard, "answer": answer, "saved": "last_reply.wav"}
